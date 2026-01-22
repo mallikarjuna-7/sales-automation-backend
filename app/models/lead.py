@@ -13,14 +13,17 @@ class Lead(Document):
     address: str
     city: str = Field(index=True)
     state: str  # 2-letter state code
+    specialty: str = Field(index=True, default="Primary Care")  # Target specialty
     phone: Optional[str] = None
     fax: Optional[str] = None
     
     # ===== EMAIL INFORMATION =====
     email: Optional[str] = Field(default=None, index=True)  # Primary email
     has_email: bool = Field(default=False, index=True)  # Quick filter
+    is_emailed: bool = Field(default=False, index=True)  # Campaign tracking
     
     # ===== WEBSITE & ONLINE PRESENCE =====
+
     website: Optional[str] = None
     profile_url: Optional[str] = None  # NPI Registry URL
     direct_messaging_address: Optional[str] = None  # NPPES Direct Messaging
@@ -60,8 +63,10 @@ class Lead(Document):
             "npi",  # Primary unique identifier
             "city",
             "state",
+            "specialty",
             "email",
             "has_email",
+            "is_emailed",
             "emr_system",
             "clinic_size",
             "enrichment_status",

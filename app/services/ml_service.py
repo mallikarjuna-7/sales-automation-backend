@@ -11,7 +11,7 @@ class MLServiceClient:
     
     def __init__(self):
         self.base_url = settings.ML_SERVICE_URL
-        self.timeout = 120.0  # Increased to 120 seconds for long Apollo searches
+        self.timeout = 1000.0  # Increased to 300 seconds for deep Apollo searches
 
     
     async def call_scout(

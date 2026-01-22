@@ -19,8 +19,7 @@ async def recruit_leads(request: LeadRecruitRequest):
     try:
         result = await lead_service.recruit_leads(
             location=request.location,
-            specialty=request.specialty,
-            count=request.count
+            specialty=request.specialty
         )
         return result
     except Exception as e:

@@ -8,254 +8,151 @@ from app.services.ml_service import ml_client
 
 logger = logging.getLogger(__name__)
 
-async def recruit_leads(location: str, specialty: str = "Primary Care", count: int = 10):
+async def recruit_leads(location: str, specialty: str = "Primary Care"):
     """
     Recruit leads for a location using ML Scout and Apollo services
     
     Args:
         location: City name for lead generation
         specialty: Medical specialty (default: "Primary Care")
-        count: Number of leads to generate
     
     Returns:
         Dictionary with recruitment results and statistics
     """
     logger.info("="*80)
-    logger.info(f"🚀 STARTING LEAD RECRUITMENT")
+    logger.info(f"🚀 LEAD RECRUITMENT REQUEST")
     logger.info(f"   Location: {location}")
     logger.info(f"   Specialty: {specialty}")
-    logger.info(f"   Count: {count}")
     logger.info("="*80)
     
     try:
-        # Step 1: Get existing NPIs to avoid duplicates
-        logger.info("📊 STEP 1: Checking for existing NPIs in database...")
-        try:
-            # Simple approach: Just query for NPIs only, no full document validation
-            # Use aggregate to get raw NPI values without loading full Lead documents
-            pipeline = [
-                {"$match": {"city": location}},
-                {"$project": {"npi": 1, "_id": 0}},
-                {"$match": {"npi": {"$exists": True, "$ne": None}}}
-            ]
-            
-            logger.info(f"   → Querying database for existing NPIs in {location}")
-            
-            # Use aggregate to bypass document validation - use async for to be safe
-            cursor = Lead.aggregate(pipeline)
-            existing_npis = []
-            async for doc in cursor:
-                npi = doc.get("npi")
-                if npi:
-                    existing_npis.append(npi)
-            
-            logger.info(f"   ✓ Found {len(existing_npis)} existing NPIs in database")
-
-            if existing_npis:
-                logger.info(f"   → Existing NPIs: {existing_npis[:5]}{'...' if len(existing_npis) > 5 else ''}")
-        except Exception as e:
-            logger.error(f"   ✗ ERROR checking existing NPIs: {str(e)}")
-            logger.error(f"   → Error type: {type(e).__name__}")
-            # If database check fails, continue with empty list (no duplicates to exclude)
-            logger.warning("   ⚠ Continuing with empty NPI list")
-            existing_npis = []
+        # Step 1: Check total records in database for this city/specialty
+        logger.info(f"📊 STEP 1: Checking total records for {location} | {specialty}...")
+        total_count = await Lead.find({"city": location, "specialty": specialty}).count()
+        logger.info(f"   → Total records in DB: {total_count}")
         
-        # Step 2: Call ML Scout API
-        logger.info("")
-        logger.info("🔍 STEP 2: Calling ML Scout API...")
-        try:
+        # Step 2: Trigger recruitment ONLY if total records == 0
+        if total_count == 0:
+            logger.info("🔍 No records found. Triggering AI Recruitment flow...")
+            
+            # 2.1: Get existing NPIs from other locations (to avoid global duplicates)
+            logger.info("   → Checking for global NPI duplicates...")
+            # Using distinct is the most efficient and stable way to get all NPIs in Beanie
+            existing_npis = await Lead.distinct("npi")
+            logger.info(f"   → Found {len(existing_npis)} existing NPIs to exclude.")
+            
+            # 2.2: Call ML Scout API
+            logger.info("🔍 Calling ML Scout API...")
             scout_response = await ml_client.call_scout(
                 city=location,
                 specialty=specialty,
-                count=count,
+                count=10,  # Default to 10 for first recruitment
                 exclude_npis=existing_npis
             )
             
             scout_leads = scout_response.get("leads", [])
             logger.info(f"   ✓ Scout API returned {len(scout_leads)} leads")
             
-            if not scout_leads:
-                logger.warning("   ⚠ Scout API returned no leads - ending recruitment")
-                return {
-                    "status": "success",
-                    "location": location,
-                    "specialty": specialty,
-                    "total_leads": 0,
-                    "with_email": 0,
-                    "without_email": 0,
-                    "email_coverage_percent": 0.0,
-                    "leads": []
-                }
-        except Exception as e:
-            logger.error(f"   ✗ ERROR calling Scout API: {str(e)}")
-            logger.error(f"   → Error type: {type(e).__name__}")
-            raise Exception(f"Scout API failed: {str(e)}")
-        
-        # Step 3: Separate leads by email status
-        logger.info("")
-        logger.info("📧 STEP 3: Separating leads by email status...")
-        leads_with_email = []
-        leads_without_email = []
-        
-        for lead in scout_leads:
-            if lead.get("email"):
-                leads_with_email.append(lead)
-            else:
-                leads_without_email.append(lead)
-        
-        logger.info(f"   ✓ Leads WITH email: {len(leads_with_email)}")
-        logger.info(f"   ✓ Leads WITHOUT email: {len(leads_without_email)}")
-        
-        # Step 4: Call Apollo for leads without email
-        apollo_enriched = []
-        if leads_without_email:
-            logger.info("")
-            logger.info("🌐 STEP 4: Calling Apollo API for email enrichment...")
-            try:
-                # Prepare leads for Apollo
-                apollo_input = []
-                for lead in leads_without_email:
-                    apollo_input.append({
-                        "name": lead.get("name"),
-                        "clinic_name": lead.get("clinic_name"),
-                        "address": lead.get("address"),
-                        "city": lead.get("city"),
-                        "state": lead.get("state"),
-                        "npi": lead.get("npi"),
-                        # Add required fields for ML service validation
-                        "emr_system": lead.get("emr_system"),
-                        "clinic_size": lead.get("clinic_size")
-                    })
+            if scout_leads:
+                # 2.3: Separate leads by email status
+                leads_with_email = []
+                leads_without_email = []
+                for lead in scout_leads:
+                    if lead.get("email"):
+                        leads_with_email.append(lead)
+                    else:
+                        leads_without_email.append(lead)
                 
-                logger.info(f"   → Sending {len(apollo_input)} leads to Apollo")
-                apollo_response = await ml_client.call_apollo(apollo_input)
-                apollo_enriched = apollo_response.get("leads", [])
-                logger.info(f"   ✓ Apollo returned enrichment for {len(apollo_enriched)} leads")
-                logger.info(f"   → Emails found: {apollo_response.get('emails_found', 0)}")
-            except Exception as e:
-                logger.error(f"   ✗ ERROR calling Apollo API: {str(e)}")
-                logger.warning("   ⚠ Continuing without Apollo enrichment")
+                # 2.4: Call Apollo for email enrichment
                 apollo_enriched = []
-        else:
-            logger.info("")
-            logger.info("⏭️  STEP 4: Skipping Apollo (all leads have emails)")
-        
-        # Step 5: Merge Scout and Apollo data
-        logger.info("")
-        logger.info("🔄 STEP 5: Merging Scout and Apollo data...")
-        final_leads = []
-        
-        # Create a lookup dictionary for Apollo data by NPI for faster matching
-        apollo_lookup = {}
-        if apollo_enriched:
-            for apollo_lead in apollo_enriched:
-                npi = apollo_lead.get("npi")
-                if npi:
-                    apollo_lookup[npi] = apollo_lead
-            logger.info(f"   → Created Apollo lookup with {len(apollo_lookup)} entries")
-        
-        # Add leads that already had email from Scout
-        for scout_lead in leads_with_email:
-            final_leads.append(_prepare_lead_for_db(scout_lead, apollo_data=None))
-        
-        # Merge Apollo data with Scout data for leads without email
-        for scout_lead in leads_without_email:
-            # Find matching Apollo data by NPI
-            npi = scout_lead.get("npi")
-            apollo_data = apollo_lookup.get(npi) if npi else None
-            
-            if apollo_data:
-                logger.info(f"   → Merging Apollo data for NPI {npi}")
-            
-            final_leads.append(_prepare_lead_for_db(scout_lead, apollo_data))
-        
-        logger.info(f"   ✓ Prepared {len(final_leads)} leads for database")
-        
-        # Step 6: Save to database (skip duplicates)
-        logger.info("")
-        logger.info("💾 STEP 6: Saving leads to database...")
-        saved_leads = []
-        skipped_count = 0
-        
-        try:
-            for idx, lead_data in enumerate(final_leads):
-                try:
-                    # Check if NPI already exists
+                if leads_without_email:
+                    logger.info("🌐 Calling Apollo API for email enrichment...")
+                    apollo_input = []
+                    for lead in leads_without_email:
+                        apollo_input.append({
+                            "name": lead.get("name"),
+                            "clinic_name": lead.get("clinic_name"),
+                            "address": lead.get("address"),
+                            "city": lead.get("city"),
+                            "state": lead.get("state"),
+                            "npi": lead.get("npi"),
+                            "emr_system": lead.get("emr_system"),
+                            "clinic_size": lead.get("clinic_size")
+                        })
+                    apollo_response = await ml_client.call_apollo(apollo_input)
+                    apollo_enriched = apollo_response.get("leads", [])
+                
+                # 2.5: Merge and Save
+                apollo_lookup = {lead["npi"]: lead for lead in apollo_enriched if lead.get("npi")}
+                final_leads = []
+                
+                # Prepare with email leads
+                for scout_lead in leads_with_email:
+                    final_leads.append(_prepare_lead_for_db(scout_lead, None, specialty))
+                
+                # Prepare without email leads (merging Apollo)
+                for scout_lead in leads_without_email:
+                    npi = scout_lead.get("npi")
+                    apollo_data = apollo_lookup.get(npi)
+                    final_leads.append(_prepare_lead_for_db(scout_lead, apollo_data, specialty))
+                
+                # Save to database
+                for lead_data in final_leads:
+                    # Final safety check for duplicate NPI
                     existing = await Lead.find_one({"npi": lead_data["npi"]})
-                    if existing:
-                        logger.info(f"   ⏭️  Skipping duplicate NPI: {lead_data['npi']} ({lead_data.get('name', 'Unknown')})")
-                        skipped_count += 1
-                        continue
-                    
-                    # Create and save lead
-                    lead = Lead(**lead_data)
-                    await lead.insert()
-                    saved_leads.append(lead)
-                    logger.info(f"   ✓ Saved lead {idx+1}/{len(final_leads)}: {lead.name} (NPI: {lead.npi})")
-                except Exception as e:
-                    logger.error(f"   ✗ ERROR saving lead {idx+1}: {str(e)}")
-                    logger.error(f"   → Lead data: {lead_data.get('name', 'Unknown')} (NPI: {lead_data.get('npi', 'N/A')})")
-                    continue
+                    if not existing:
+                        lead = Lead(**lead_data)
+                        await lead.insert()
             
-            logger.info(f"   ✓ Successfully saved {len(saved_leads)} leads")
-            logger.info(f"   ⏭️  Skipped {skipped_count} duplicates")
-        except Exception as e:
-            logger.error(f"   ✗ ERROR during database save: {str(e)}")
-            raise Exception(f"Database save failed: {str(e)}")
+            logger.info("💾 Recruitment and save complete.")
+        else:
+            logger.info("✅ Records exist. Skipping AI Recruitment (using Cache).")
         
-        # Step 7: Calculate statistics
-        logger.info("")
-        logger.info("📊 STEP 7: Calculating statistics...")
-        with_email_count = sum(1 for lead in saved_leads if lead.has_email)
-        without_email_count = len(saved_leads) - with_email_count
-        email_coverage = (with_email_count / len(saved_leads) * 100) if saved_leads else 0.0
+        # Step 3: Fetch top 5 valid leads to return
+        # Constraints: city=location, specialty=specialty, has_email=True, is_emailed=False
+        logger.info("📝 Fetching top 5 leads (has email & not yet emailed)...")
+        results = await Lead.find({
+            "city": location,
+            "specialty": specialty,
+            "has_email": True,
+            "is_emailed": False
+        }).limit(5).to_list()
         
-        logger.info(f"   ✓ Total leads saved: {len(saved_leads)}")
-        logger.info(f"   ✓ With email: {with_email_count}")
-        logger.info(f"   ✓ Without email: {without_email_count}")
-        logger.info(f"   ✓ Email coverage: {email_coverage:.2f}%")
+        with_email_count = len(results)
+        logger.info(f"   ✓ Found {with_email_count} leads ready for campaign")
         
-        logger.info("")
         logger.info("="*80)
-        logger.info("✅ LEAD RECRUITMENT COMPLETED SUCCESSFULLY")
+        logger.info("✅ LEAD RECRUITMENT FLOW COMPLETE")
         logger.info("="*80)
         
         return {
             "status": "success",
             "location": location,
             "specialty": specialty,
-            "total_leads": len(saved_leads),
+            "total_leads": with_email_count,
             "with_email": with_email_count,
-            "without_email": without_email_count,
-            "email_coverage_percent": round(email_coverage, 2),
-            "leads": [lead.model_dump(mode='python', exclude={'id'}) for lead in saved_leads]
+            "without_email": 0,
+            "email_coverage_percent": 100.0 if with_email_count > 0 else 0.0,
+            "leads": [
+    {
+        **lead.model_dump(mode="python", exclude={"id"}),
+        "id": str(lead.id)
+    }
+    for lead in results
+]
+
         }
     
     except Exception as e:
-        logger.error("")
-        logger.error("="*80)
-        logger.error("❌ LEAD RECRUITMENT FAILED")
-        logger.error(f"   Error: {str(e)}")
-        logger.error(f"   Type: {type(e).__name__}")
-        logger.error("="*80)
-        raise
+        logger.error(f"❌ LEAD RECRUITMENT FAILED: {str(e)}")
+        raise Exception(f"Lead recruitment failed: {str(e)}")
 
 
 
-def _prepare_lead_for_db(scout_lead: dict, apollo_data: Optional[dict] = None) -> dict:
-    """
-    Prepare lead data for database insertion
-    Merge Scout (primary) and Apollo (secondary) data
-    Rule: If Scout field is empty, use Apollo value
-    
-    Args:
-        scout_lead: Lead data from Scout API
-        apollo_data: Optional enrichment data from Apollo API
-    
-    Returns:
-        Dictionary ready for Lead model insertion
-    """
-    # Start with Scout data (primary source)
+
+def _prepare_lead_for_db(scout_lead: dict, apollo_data: Optional[dict] = None, specialty: str = "Primary Care") -> dict:
+    """Merge Scout and Apollo data into single dictionary for database"""
+    # Base data from Scout
     lead_data = {
         "npi": scout_lead.get("npi"),
         "name": scout_lead.get("name"),
@@ -263,6 +160,7 @@ def _prepare_lead_for_db(scout_lead: dict, apollo_data: Optional[dict] = None) -
         "address": scout_lead.get("address"),
         "city": scout_lead.get("city"),
         "state": scout_lead.get("state"),
+        "specialty": specialty,  # Added specialty
         "phone": scout_lead.get("phone"),
         "fax": scout_lead.get("fax"),
         "website": scout_lead.get("website"),
@@ -275,14 +173,22 @@ def _prepare_lead_for_db(scout_lead: dict, apollo_data: Optional[dict] = None) -
         "size_confidence": scout_lead.get("size_confidence"),
         "data_source": scout_lead.get("data_source"),
         "created_at": datetime.utcnow(),
+        "is_emailed": False,  # Default to False
     }
     
     # Set email from Scout if available
     scout_email = scout_lead.get("email")
+    direct_email = scout_lead.get("direct_messaging_address")
+    
     if scout_email:
         lead_data["email"] = scout_email
         lead_data["has_email"] = True
         lead_data["enrichment_status"] = "scout_only"
+    elif direct_email:
+        lead_data["email"] = direct_email
+        lead_data["has_email"] = True
+        lead_data["enrichment_status"] = "scout_only"
+        logger.info(f"      ✓ Using Direct Messaging Address as fallback: {direct_email}")
     else:
         lead_data["email"] = None
         lead_data["has_email"] = False

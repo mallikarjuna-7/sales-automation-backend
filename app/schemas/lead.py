@@ -13,7 +13,7 @@ class LeadCreate(BaseModel):
 class LeadRecruitRequest(BaseModel):
     location: str
     specialty: Optional[str] = "Primary Care"
-    count: Optional[int] = 10
+
 
 class LeadRecruitResponse(BaseModel):
     status: str
