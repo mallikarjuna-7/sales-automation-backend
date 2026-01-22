@@ -17,15 +17,10 @@ class Settings(BaseSettings):
     # ML Service Settings
     ML_SERVICE_URL: str
     
-    # SMTP Settings
-    MAIL_USERNAME: str
-    MAIL_PASSWORD: str
+    # Email Settings (Resend)
+    RESEND_API_KEY: str
     MAIL_FROM: str
-    MAIL_PORT: int
-    MAIL_SERVER: str
-    MAIL_FROM_NAME: str
-    MAIL_STARTTLS: bool
-    MAIL_SSL_TLS: bool
+    MAIL_FROM_NAME: str = "Sales Automation"
 
 @lru_cache()
 def get_settings():

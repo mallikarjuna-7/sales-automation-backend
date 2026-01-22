@@ -1,26 +1,14 @@
 from datetime import datetime
 from fastapi import HTTPException
-from fastapi_mail import FastMail, MessageSchema, ConnectionConfig, MessageType
 from app.core.config import get_settings
 from app.models.email import Email
 from app.models.lead import Lead
 from app.schemas.email import EmailSendRequest
 from beanie import PydanticObjectId
+import resend
 
 settings = get_settings()
-
-conf = ConnectionConfig(
-    MAIL_USERNAME=settings.MAIL_USERNAME,
-    MAIL_PASSWORD=settings.MAIL_PASSWORD,
-    MAIL_FROM=settings.MAIL_FROM,
-    MAIL_PORT=settings.MAIL_PORT,
-    MAIL_SERVER=settings.MAIL_SERVER,
-    MAIL_FROM_NAME=settings.MAIL_FROM_NAME,
-    MAIL_STARTTLS=settings.MAIL_STARTTLS,
-    MAIL_SSL_TLS=settings.MAIL_SSL_TLS,
-    USE_CREDENTIALS=True,
-    VALIDATE_CERTS=True
-)
+resend.api_key = settings.RESEND_API_KEY
 
 async def send_outreach_email(email_data: EmailSendRequest):
     lead = None
@@ -32,22 +20,29 @@ async def send_outreach_email(email_data: EmailSendRequest):
         if not lead:
             raise HTTPException(status_code=404, detail="Lead not found")
 
-    # Send actual email if SMTP is configured
+    # Send email using Resend API
     sent_status = "stored (simulated)"
-    if settings.MAIL_USERNAME and settings.MAIL_PASSWORD:
-        message = MessageSchema(
-            subject=email_data.subject,
-            recipients=[email_data.receiver],
-            body=email_data.body,
-            subtype=MessageType.plain
-        )
-        fm = FastMail(conf)
-        try:
-            await fm.send_message(message)
-            sent_status = "sent"
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Email failed to send: {str(e)}")
+    email_error = None
     
+    if settings.RESEND_API_KEY:
+        params = {
+            "from": f"{settings.MAIL_FROM_NAME} <{settings.MAIL_FROM}>",
+            "to": [email_data.receiver],
+            "subject": email_data.subject,
+            "html": f"<p>{email_data.body}</p>",
+        }
+        
+        try:
+            response = resend.Emails.send(params)
+            sent_status = "sent"
+            print(f"Email sent successfully via Resend: {response}")
+        except Exception as e:
+            # Log error but don't fail - continue with database operations
+            email_error = str(e)
+            sent_status = "failed"
+            print(f"Email sending failed: {email_error}")
+    
+    # Save email record to database
     email_record = Email(
         sender=email_data.sender,
         receiver=email_data.receiver,
@@ -64,8 +59,13 @@ async def send_outreach_email(email_data: EmailSendRequest):
         lead.is_emailed = True
         await lead.save()
     
-    return {
+    response_data = {
         "status": sent_status,
         "email_id": str(email_record.id),
         "timestamp": email_record.timestamp
     }
+    
+    if email_error:
+        response_data["error"] = email_error
+    
+    return response_data
