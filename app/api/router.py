@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.endpoints import leads, emails, dashboard, health
+from app.api import leads, emails, dashboard, health
 
 api_router = APIRouter()
 

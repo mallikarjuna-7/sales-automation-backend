@@ -1,22 +1,11 @@
-from fastapi import APIRouter, HTTPException
-from typing import Optional
-from beanie import PydanticObjectId
-from app.models.email import Email
-from app.models.lead import Lead
-from pydantic import BaseModel, EmailStr
 from datetime import datetime
-
-router = APIRouter()
-
-class EmailSendRequest(BaseModel):
-    sender: str
-    receiver: str
-    subject: str
-    body: str
-    lead_id: Optional[str] = None
-
+from fastapi import HTTPException
 from fastapi_mail import FastMail, MessageSchema, ConnectionConfig, MessageType
 from app.core.config import get_settings
+from app.models.email import Email
+from app.models.lead import Lead
+from app.schemas.email import EmailSendRequest
+from beanie import PydanticObjectId
 
 settings = get_settings()
 
@@ -33,8 +22,7 @@ conf = ConnectionConfig(
     VALIDATE_CERTS=True
 )
 
-@router.post("/send")
-async def send_email(email_data: EmailSendRequest):
+async def send_outreach_email(email_data: EmailSendRequest):
     lead = None
     if email_data.lead_id:
         if not PydanticObjectId.is_valid(email_data.lead_id):
@@ -45,6 +33,7 @@ async def send_email(email_data: EmailSendRequest):
             raise HTTPException(status_code=404, detail="Lead not found")
 
     # Send actual email if SMTP is configured
+    sent_status = "stored (simulated)"
     if settings.MAIL_USERNAME and settings.MAIL_PASSWORD:
         message = MessageSchema(
             subject=email_data.subject,
@@ -55,6 +44,7 @@ async def send_email(email_data: EmailSendRequest):
         fm = FastMail(conf)
         try:
             await fm.send_message(message)
+            sent_status = "sent"
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Email failed to send: {str(e)}")
     
@@ -70,11 +60,7 @@ async def send_email(email_data: EmailSendRequest):
     await email_record.insert()
     
     return {
-        "status": "sent" if settings.MAIL_USERNAME else "stored (simulated)",
+        "status": sent_status,
         "email_id": str(email_record.id),
         "timestamp": email_record.timestamp
     }
-
-@router.get("/")
-async def list_emails(limit: int = 50):
-    return await Email.find_all().sort("-timestamp").limit(limit).to_list()
