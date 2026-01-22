@@ -59,6 +59,11 @@ async def send_outreach_email(email_data: EmailSendRequest):
     
     await email_record.insert()
     
+    # Update lead's is_emailed status if lead exists
+    if lead:
+        lead.is_emailed = True
+        await lead.save()
+    
     return {
         "status": sent_status,
         "email_id": str(email_record.id),
