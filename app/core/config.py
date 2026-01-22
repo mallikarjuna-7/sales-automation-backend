@@ -17,6 +17,12 @@ class Settings(BaseSettings):
     # ML Service Settings
     ML_SERVICE_URL: str
     
+    # Apollo.io Settings
+    APOLLO_API_KEY: str = ""
+    
+    # NeverBounce Settings
+    NEVERBOUNCE_API_KEY: str = ""
+    
     # Email Settings (Resend)
     RESEND_API_KEY: str
     MAIL_FROM: str
