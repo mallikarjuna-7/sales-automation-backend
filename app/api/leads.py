@@ -1,10 +1,30 @@
 from fastapi import APIRouter, HTTPException, Query
 from typing import List, Optional
 from app.models.lead import Lead
-from app.schemas.lead import LeadCreate
+from app.schemas.lead import LeadCreate, LeadRecruitRequest, LeadRecruitResponse
 from app.services import lead_service
 
 router = APIRouter()
+
+@router.post("/recruit", response_model=LeadRecruitResponse)
+async def recruit_leads(request: LeadRecruitRequest):
+    """
+    Recruit leads for a location using ML Scout and Apollo services
+    
+    - Generates new physician leads for specified location
+    - Enriches leads with email addresses via Apollo
+    - Prevents duplicates using NPI checking
+    - Returns comprehensive statistics
+    """
+    try:
+        result = await lead_service.recruit_leads(
+            location=request.location,
+            specialty=request.specialty,
+            count=request.count
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Lead recruitment failed: {str(e)}")
 
 @router.post("/", response_model=List[Lead])
 async def create_leads(leads_data: List[LeadCreate]):
@@ -24,3 +44,4 @@ async def get_lead(lead_id: str):
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
     return lead
+

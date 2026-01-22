@@ -7,6 +7,9 @@ class Settings(BaseSettings):
     PORT: int = 8000
     DEBUG: bool = False
     
+    # ML Service Settings
+    ML_SERVICE_URL: str = "http://localhost:8080"  # ML Lead Generation Service URL
+    
     # SMTP Settings
     MAIL_USERNAME: str = ""
     MAIL_PASSWORD: str = ""
@@ -23,3 +26,4 @@ class Settings(BaseSettings):
 @lru_cache()
 def get_settings():
     return Settings()
+
