@@ -23,9 +23,11 @@ class Settings(BaseSettings):
     # NeverBounce Settings
     NEVERBOUNCE_API_KEY: str = ""
     
-    # Email Settings (Resend)
-    RESEND_API_KEY: str
-    MAIL_FROM: str
+    # Email Settings (Gmail API)
+    GMAIL_CLIENT_ID: str
+    GMAIL_CLIENT_SECRET: str
+    GMAIL_REFRESH_TOKEN: str
+    GMAIL_SENDER: str
     MAIL_FROM_NAME: str = "Sales Automation"
 
 @lru_cache()
