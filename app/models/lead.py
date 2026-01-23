@@ -21,6 +21,7 @@ class Lead(Document):
     email: Optional[str] = Field(default=None, index=True)  # Primary email
     has_email: bool = Field(default=False, index=True)  # Quick filter
     is_emailed: bool = Field(default=False, index=True)  # Campaign tracking
+    visited: bool = Field(default=False, index=True)  # Apollo enrichment tracking
     
     # ===== WEBSITE & ONLINE PRESENCE =====
 
@@ -58,7 +59,7 @@ class Lead(Document):
     last_enriched_at: Optional[datetime] = None
     
     class Settings:
-        name = "leads"
+        name = "leads1"
         indexes = [
             "npi",  # Primary unique identifier
             "city",
@@ -67,6 +68,7 @@ class Lead(Document):
             "email",
             "has_email",
             "is_emailed",
+            "visited",
             "emr_system",
             "clinic_size",
             "enrichment_status",

@@ -5,147 +5,316 @@ from app.models.lead import Lead
 from app.models.email import Email
 from app.schemas.lead import LeadCreate
 from app.services.ml_service import ml_client
+from app.core import nppes_client, emr_estimator
 
 logger = logging.getLogger(__name__)
 
-async def recruit_leads(location: str, specialty: str = "Primary Care"):
+
+async def load_leads_from_nppes(location: str, specialty: str = "Primary Care"):
     """
-    Recruit leads for a location using ML Scout and Apollo services
+    Load leads from NPPES API and store in database
     
     Args:
         location: City name for lead generation
         specialty: Medical specialty (default: "Primary Care")
     
     Returns:
-        Dictionary with recruitment results and statistics
+        Dictionary with load results and statistics
     """
     logger.info("="*80)
-    logger.info(f"🚀 LEAD RECRUITMENT REQUEST")
+    logger.info(f"📥 NPPES LEAD LOADING REQUEST")
     logger.info(f"   Location: {location}")
     logger.info(f"   Specialty: {specialty}")
     logger.info("="*80)
     
     try:
-        # Step 1: Check total records in database for this city/specialty
-        logger.info(f"📊 STEP 1: Checking total records for {location} | {specialty}...")
-        total_count = await Lead.find({"city": location, "specialty": specialty}).count()
-        logger.info(f"   → Total records in DB: {total_count}")
+        # Step 1: Call NPPES API directly
+        logger.info(f"🔍 Calling NPPES API for {location} | {specialty}...")
+        providers = await nppes_client.search_providers(
+            city=location,
+            specialty=specialty,
+            limit=50  # Fetch up to 50 providers
+        )
         
-        # Step 2: Trigger recruitment ONLY if total records == 0
-        if total_count == 0:
-            logger.info("🔍 No records found. Triggering AI Recruitment flow...")
+        if not providers:
+            logger.warning(f"No providers found for {location}, {specialty}")
+            return {
+                "status": "success",
+                "location": location,
+                "specialty": specialty,
+                "leads_loaded": 0,
+                "with_email": 0,
+                "without_email": 0
+            }
+        
+        logger.info(f"   ✓ NPPES returned {len(providers)} providers")
+        
+        # Step 2: Process and store each provider
+        leads_loaded = 0
+        with_email_count = 0
+        without_email_count = 0
+        
+        for provider in providers:
+            npi = provider.get("npi")
             
-            # 2.1: Get existing NPIs from other locations (to avoid global duplicates)
-            logger.info("   → Checking for global NPI duplicates...")
-            # Using distinct is the most efficient and stable way to get all NPIs in Beanie
-            existing_npis = await Lead.distinct("npi")
-            logger.info(f"   → Found {len(existing_npis)} existing NPIs to exclude.")
+            # Check for duplicate NPI
+            existing = await Lead.find_one({"npi": npi})
+            if existing:
+                logger.debug(f"   ⊘ Skipping duplicate NPI: {npi}")
+                continue
             
-            # 2.2: Call ML Scout API
-            logger.info("🔍 Calling ML Scout API...")
-            scout_response = await ml_client.call_scout(
-                city=location,
-                specialty=specialty,
-                count=10,  # Default to 10 for first recruitment
-                exclude_npis=existing_npis
+            # Email fallback logic
+            email = None
+            has_email = False
+            
+            # Priority 1: Use email if available (NPPES doesn't typically have this)
+            if provider.get("email"):
+                email = provider.get("email")
+                has_email = True
+                logger.info(f"   ✓ Found email for {provider.get('name')}: {email}")
+            # Priority 2: Use direct_address as fallback
+            elif provider.get("direct_messaging_address"):
+                email = provider.get("direct_messaging_address")
+                has_email = True
+                logger.info(f"   ✓ Using Direct Address for {provider.get('name')}: {email}")
+            else:
+                logger.debug(f"   ⊘ No email for {provider.get('name')}")
+            
+            # Estimate EMR and clinic size
+            state = provider.get('state', '').upper()
+            org_name = provider.get('organization_name') or "Private Practice"
+            
+            size_estimate, emr_estimate = emr_estimator.estimate_provider_systems(
+                organization_name=org_name,
+                state=state,
+                specialty=specialty
             )
             
-            scout_leads = scout_response.get("leads", [])
-            logger.info(f"   ✓ Scout API returned {len(scout_leads)} leads")
+            # Create lead document
+            lead_data = {
+                "npi": npi,
+                "name": provider.get("name"),
+                "clinic_name": org_name,
+                "address": provider.get("address", ""),
+                "city": provider.get("city", location),
+                "state": state,
+                "specialty": specialty,
+                "phone": provider.get("phone"),
+                "fax": provider.get("fax"),
+                "email": email,
+                "has_email": has_email,
+                "website": None,
+                "profile_url": None,
+                "direct_messaging_address": provider.get("direct_messaging_address"),
+                "emr_system": emr_estimate.emr_system,
+                "emr_confidence": emr_estimate.confidence,
+                "emr_source": "regional_estimate",
+                "clinic_size": size_estimate.clinic_size,
+                "size_confidence": size_estimate.confidence,
+                "data_source": "nppes_enriched",
+                "enrichment_status": "scout_only",
+                "visited": False,  # Not yet sent to Apollo
+                "is_emailed": False,  # Not yet emailed
+                "created_at": datetime.utcnow()
+            }
             
-            if scout_leads:
-                # 2.3: Separate leads by email status
-                leads_with_email = []
-                leads_without_email = []
-                for lead in scout_leads:
-                    if lead.get("email"):
-                        leads_with_email.append(lead)
-                    else:
-                        leads_without_email.append(lead)
-                
-                # 2.4: Call Apollo for email enrichment
-                apollo_enriched = []
-                if leads_without_email:
-                    logger.info("🌐 Calling Apollo API for email enrichment...")
-                    apollo_input = []
-                    for lead in leads_without_email:
-                        apollo_input.append({
-                            "name": lead.get("name"),
-                            "clinic_name": lead.get("clinic_name"),
-                            "address": lead.get("address"),
-                            "city": lead.get("city"),
-                            "state": lead.get("state"),
-                            "npi": lead.get("npi"),
-                            "emr_system": lead.get("emr_system"),
-                            "clinic_size": lead.get("clinic_size")
-                        })
-                    apollo_response = await ml_client.call_apollo(apollo_input)
-                    apollo_enriched = apollo_response.get("leads", [])
-                
-                # 2.5: Merge and Save
-                apollo_lookup = {lead["npi"]: lead for lead in apollo_enriched if lead.get("npi")}
-                final_leads = []
-                
-                # Prepare with email leads
-                for scout_lead in leads_with_email:
-                    final_leads.append(_prepare_lead_for_db(scout_lead, None, specialty))
-                
-                # Prepare without email leads (merging Apollo)
-                for scout_lead in leads_without_email:
-                    npi = scout_lead.get("npi")
-                    apollo_data = apollo_lookup.get(npi)
-                    final_leads.append(_prepare_lead_for_db(scout_lead, apollo_data, specialty))
-                
-                # Save to database
-                for lead_data in final_leads:
-                    # Final safety check for duplicate NPI
-                    existing = await Lead.find_one({"npi": lead_data["npi"]})
-                    if not existing:
-                        lead = Lead(**lead_data)
-                        await lead.insert()
+            # Insert into database
+            lead = Lead(**lead_data)
+            await lead.insert()
             
-            logger.info("💾 Recruitment and save complete.")
-        else:
-            logger.info("✅ Records exist. Skipping AI Recruitment (using Cache).")
-        
-        # Step 3: Fetch top 5 valid leads to return
-        # Constraints: city=location, specialty=specialty, has_email=True, is_emailed=False
-        logger.info("📝 Fetching top 5 leads (has email & not yet emailed)...")
-        results = await Lead.find({
-            "city": location,
-            "specialty": specialty,
-            "has_email": True,
-            "is_emailed": False
-        }).limit(5).to_list()
-        
-        with_email_count = len(results)
-        logger.info(f"   ✓ Found {with_email_count} leads ready for campaign")
+            leads_loaded += 1
+            if has_email:
+                with_email_count += 1
+            else:
+                without_email_count += 1
         
         logger.info("="*80)
-        logger.info("✅ LEAD RECRUITMENT FLOW COMPLETE")
+        logger.info(f"✅ NPPES LOADING COMPLETE")
+        logger.info(f"   Total Loaded: {leads_loaded}")
+        logger.info(f"   With Email: {with_email_count}")
+        logger.info(f"   Without Email: {without_email_count}")
         logger.info("="*80)
         
         return {
             "status": "success",
             "location": location,
             "specialty": specialty,
-            "total_leads": with_email_count,
+            "leads_loaded": leads_loaded,
             "with_email": with_email_count,
-            "without_email": 0,
-            "email_coverage_percent": 100.0 if with_email_count > 0 else 0.0,
-            "leads": [
-    {
-        **lead.model_dump(mode="python", exclude={"id"}),
-        "id": str(lead.id)
-    }
-    for lead in results
-]
+            "without_email": without_email_count
+        }
+    
+    except Exception as e:
+        logger.error(f"❌ NPPES LOADING FAILED: {str(e)}")
+        raise Exception(f"Lead loading failed: {str(e)}")
 
+
+
+async def recruit_leads(location: str, specialty: str = "Primary Care"):
+    """
+    Recruit leads by enriching unvisited leads with Apollo API
+    
+    Args:
+        location: City name for lead recruitment
+        specialty: Medical specialty (default: "Primary Care")
+    
+    Returns:
+        Dictionary with recruitment results and top 5 leads ready for email
+    """
+    logger.info("="*80)
+    logger.info(f"🎯 LEAD RECRUITMENT REQUEST")
+    logger.info(f"   Location: {location}")
+    logger.info(f"   Specialty: {specialty}")
+    logger.info("="*80)
+    
+    try:
+        # Step 1: Fetch top 10 unvisited leads
+        logger.info(f"📊 STEP 1: Fetching top 10 unvisited leads for {location} | {specialty}...")
+        unvisited_leads = await Lead.find({
+            "city": location,
+            "specialty": specialty,
+            "visited": False
+        }).limit(10).to_list()
+        
+        if not unvisited_leads:
+            logger.warning(f"⚠️ No unvisited leads found for {location} | {specialty}")
+            logger.info("   Tip: Call POST /api/leads/load first to fetch leads from NPPES")
+            
+            # Still return top 5 ready leads if they exist
+            ready_leads = await Lead.find({
+                "city": location,
+                "specialty": specialty,
+                "has_email": True,
+                "is_emailed": False
+            }).limit(5).to_list()
+            
+            return {
+                "status": "success",
+                "location": location,
+                "specialty": specialty,
+                "enriched_count": 0,
+                "returned_count": len(ready_leads),
+                "leads": [
+                    {
+                        **lead.model_dump(mode="python", exclude={"id"}),
+                        "id": str(lead.id)
+                    }
+                    for lead in ready_leads
+                ]
+            }
+        
+        logger.info(f"   ✓ Found {len(unvisited_leads)} unvisited leads")
+        
+        # Step 2: Prepare leads for Apollo enrichment
+        logger.info("🌐 STEP 2: Preparing leads for Apollo enrichment...")
+        apollo_input = []
+        for lead in unvisited_leads:
+            # Parse name to extract first and last name
+            name = lead.name.replace("Dr.", "").replace("Dr ", "")
+            name = name.replace("M.D.", "").replace("MD", "").replace(" MD", "")
+            name = name.replace("D.O.", "").replace("DO", "").replace(" DO", "")
+            name = name.replace(",", "").replace("  ", " ").strip()
+            
+            name_parts = name.split()
+            first_name = name_parts[0] if len(name_parts) > 0 else ""
+            last_name = name_parts[-1] if len(name_parts) > 1 else ""
+            
+            apollo_input.append({
+                "name": lead.name,
+                "first_name": first_name,
+                "last_name": last_name,
+                "clinic_name": lead.clinic_name,
+                "address": lead.address,
+                "city": lead.city,
+                "state": lead.state,
+                "npi": lead.npi,
+                "emr_system": lead.emr_system,
+                "clinic_size": lead.clinic_size
+            })
+        
+        # Step 3: Call Apollo API
+        logger.info(f"🔍 STEP 3: Calling Apollo API for {len(apollo_input)} leads...")
+        apollo_response = await ml_client.call_apollo(apollo_input)
+        apollo_enriched = apollo_response.get("leads", [])
+        
+        logger.info(f"   ✓ Apollo returned enrichment data for {len(apollo_enriched)} leads")
+        
+        # Step 4: Update database with Apollo data
+        logger.info("💾 STEP 4: Updating database with Apollo enrichment...")
+        enriched_count = 0
+        
+        for i, lead in enumerate(unvisited_leads):
+            apollo_data = apollo_enriched[i] if i < len(apollo_enriched) else {}
+            
+            update_fields = {
+                "visited": True,  # Mark as visited
+                "last_enriched_at": datetime.utcnow()
+            }
+            
+            # Add Apollo data if available
+            if apollo_data.get("apollo_email"):
+                update_fields["apollo_email"] = apollo_data.get("apollo_email")
+                update_fields["apollo_email_status"] = apollo_data.get("apollo_email_status")
+                update_fields["apollo_confidence"] = apollo_data.get("apollo_confidence")
+                update_fields["apollo_linkedin"] = apollo_data.get("apollo_linkedin")
+                update_fields["apollo_phone_numbers"] = apollo_data.get("apollo_phone_numbers")
+                update_fields["apollo_organization"] = apollo_data.get("apollo_organization")
+                update_fields["apollo_website"] = apollo_data.get("apollo_website")
+                update_fields["apollo_searched"] = True
+                update_fields["email_valid"] = apollo_data.get("email_valid")
+                update_fields["email_verification"] = apollo_data.get("email_verification")
+                update_fields["enrichment_status"] = "apollo_enriched"
+                
+                # If lead didn't have email but Apollo found one, update primary email
+                if not lead.email and apollo_data.get("apollo_email"):
+                    update_fields["email"] = apollo_data.get("apollo_email")
+                    update_fields["has_email"] = True
+                    logger.info(f"   ✓ Assigned Apollo email to {lead.name}: {apollo_data.get('apollo_email')}")
+                
+                enriched_count += 1
+            
+            # Update the lead in database
+            await Lead.find_one({"npi": lead.npi}).update({"$set": update_fields})
+        
+        logger.info(f"   ✓ Updated {enriched_count} leads with Apollo data")
+        
+        # Step 5: Fetch top 5 leads ready for email
+        logger.info("📝 STEP 5: Fetching top 5 leads ready for email campaign...")
+        ready_leads = await Lead.find({
+            "city": location,
+            "specialty": specialty,
+            "has_email": True,
+            "is_emailed": False
+        }).limit(5).to_list()
+        
+        logger.info(f"   ✓ Found {len(ready_leads)} leads ready for campaign")
+        
+        logger.info("="*80)
+        logger.info("✅ LEAD RECRUITMENT FLOW COMPLETE")
+        logger.info(f"   Enriched: {enriched_count} leads")
+        logger.info(f"   Returned: {len(ready_leads)} leads")
+        logger.info("="*80)
+        
+        return {
+            "status": "success",
+            "location": location,
+            "specialty": specialty,
+            "enriched_count": enriched_count,
+            "returned_count": len(ready_leads),
+            "leads": [
+                {
+                    **lead.model_dump(mode="python", exclude={"id"}),
+                    "id": str(lead.id)
+                }
+                for lead in ready_leads
+            ]
         }
     
     except Exception as e:
         logger.error(f"❌ LEAD RECRUITMENT FAILED: {str(e)}")
         raise Exception(f"Lead recruitment failed: {str(e)}")
+
+
 
 
 

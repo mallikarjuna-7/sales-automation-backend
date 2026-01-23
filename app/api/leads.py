@@ -1,20 +1,39 @@
 from fastapi import APIRouter, HTTPException, Query
 from typing import List, Optional
 from app.models.lead import Lead
-from app.schemas.lead import LeadCreate, LeadRecruitRequest, LeadRecruitResponse
+from app.schemas.lead import LeadCreate, LeadLoadRequest, LeadLoadResponse, LeadRecruitRequest, LeadRecruitResponse
 from app.services import lead_service
 
 router = APIRouter()
 
+@router.post("/load", response_model=LeadLoadResponse)
+async def load_leads(request: LeadLoadRequest):
+    """
+    Load leads from NPPES API and store in database
+    
+    - Fetches physician data from NPPES (government database)
+    - Uses direct_address as email fallback if email is missing
+    - Prevents duplicates using NPI checking
+    - Stores leads with visited=false for later Apollo enrichment
+    """
+    try:
+        result = await lead_service.load_leads_from_nppes(
+            location=request.location,
+            specialty=request.specialty
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Lead loading failed: {str(e)}")
+
 @router.post("/recruit", response_model=LeadRecruitResponse)
 async def recruit_leads(request: LeadRecruitRequest):
     """
-    Recruit leads for a location using ML Scout and Apollo services
+    Enrich unvisited leads with Apollo and return top candidates
     
-    - Generates new physician leads for specified location
-    - Enriches leads with email addresses via Apollo
-    - Prevents duplicates using NPI checking
-    - Returns comprehensive statistics
+    - Fetches top 10 unvisited leads from database
+    - Enriches with Apollo API (email, LinkedIn, phone)
+    - Updates database and marks leads as visited=true
+    - Returns top 5 leads ready for email campaign
     """
     try:
         result = await lead_service.recruit_leads(
