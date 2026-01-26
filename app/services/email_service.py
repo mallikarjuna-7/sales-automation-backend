@@ -90,6 +90,7 @@ async def send_outreach_email(email_data: EmailSendRequest):
         subject=email_data.subject,
         body=email_data.body,
         lead=lead,
+        status=sent_status,
         timestamp=datetime.utcnow()
     )
     

@@ -10,10 +10,11 @@ class Email(Document):
     subject: str = "Sales Automation Outreach"
     body: str
     lead: Optional[Link[Lead]] = None
+    status: Optional[str] = "sent"  # "sent", "failed", etc.
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     
     class Settings:
-        name = "emails"
+        name = "emails1"
         indexes = [
             "sender",
             "receiver",

@@ -248,6 +248,7 @@ async def recruit_leads(location: str, specialty: str = "Primary Care"):
             
             update_fields = {
                 "visited": True,  # Mark as visited
+                "apollo_searched": True,  # Mark that we searched Apollo for this lead
                 "last_enriched_at": datetime.utcnow()
             }
             
@@ -260,7 +261,6 @@ async def recruit_leads(location: str, specialty: str = "Primary Care"):
                 update_fields["apollo_phone_numbers"] = apollo_data.get("apollo_phone_numbers")
                 update_fields["apollo_organization"] = apollo_data.get("apollo_organization")
                 update_fields["apollo_website"] = apollo_data.get("apollo_website")
-                update_fields["apollo_searched"] = True
                 update_fields["email_valid"] = apollo_data.get("email_valid")
                 update_fields["email_verification"] = apollo_data.get("email_verification")
                 update_fields["enrichment_status"] = "apollo_enriched"
