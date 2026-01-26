@@ -185,17 +185,13 @@ class ApolloEmailFinder:
             ("city_state", {
                 "q_keywords": f"{first_name} {last_name}",
                 "person_locations": [f"{city}, {state}"] if city and state else None,
-                "per_page": 20
+                "per_page": 10
             }) if city and state else None,
             ("state_only", {
                 "q_keywords": f"{first_name} {last_name}",
                 "person_locations": [state] if state else None,
-                "per_page": 20
-            }) if state else None,
-            ("no_location", {
-                "q_keywords": f"{first_name} {last_name}",
-                "per_page": 20
-            })
+                "per_page": 10
+            }) if state else None
         ]
         
         # Remove None strategies and filter out empty payloads

@@ -19,7 +19,8 @@ async def load_leads(request: LeadLoadRequest):
     try:
         result = await lead_service.load_leads_from_nppes(
             location=request.location,
-            specialty=request.specialty
+            specialty=request.specialty,
+            limit=request.limit
         )
         return result
     except Exception as e:

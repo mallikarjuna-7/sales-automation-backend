@@ -13,6 +13,7 @@ class LeadCreate(BaseModel):
 class LeadLoadRequest(BaseModel):
     location: str
     specialty: Optional[str] = "Primary Care"
+    limit: Optional[int] = 1200
 
 class LeadLoadResponse(BaseModel):
     status: str
@@ -33,6 +34,7 @@ class LeadRecruitResponse(BaseModel):
     specialty: str
     enriched_count: int
     returned_count: int
+    remaining_credits: int  # Added to track Apollo usage
     leads: List[dict]  # List of lead objects
 
 

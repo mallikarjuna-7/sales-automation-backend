@@ -259,29 +259,26 @@ async def get_with_email_stats(
 
     pipeline = [
         {"$match": lead_query},
+        {"$lookup": {
+            "from": "emails1",
+            "localField": "_id",
+            "foreignField": "lead.$id",
+            "as": "emails"
+        }},
         {"$facet": {
             "metadata": [
-                {"$group": {"_id": None, "total": {"$sum": 1}}},
-                {"$lookup": {
-                    "from": "emails1",
-                    "localField": "_id",
-                    "foreignField": "lead.$id",
-                    "as": "emails"
-                }},
-                {"$unwind": {"path": "$emails", "preserveNullAndEmptyArrays": True}},
                 {"$group": {
-                    "_id": None,
-                    "total": {"$first": "$total"},
-                    "sent": {"$sum": {"$cond": [{"$eq": ["$emails.status", "sent"]}, 1, 0]}},
-                    "failed": {"$sum": {"$cond": [{"$eq": ["$emails.status", "failed"]}, 1, 0]}}
+                    "_id": None, 
+                    "total": {"$sum": 1},
+                    "all_emails": {"$push": "$emails"}
                 }}
             ],
             "leads": [
-                {"$sort": {"created_at": -1}},
+                {"$sort": {"is_emailed": -1, "created_at": -1}},
                 {"$skip": skip},
                 {"$limit": page_size},
                 {"$addFields": {"id": {"$toString": "$_id"}}},
-                {"$project": {"_id": 0}}
+                {"$project": {"_id": 0, "emails": 0}}
             ]
         }}
     ]
@@ -290,10 +287,13 @@ async def get_with_email_stats(
     results = await cursor.to_list(length=1)
     data = results[0] if results else {"metadata": [], "leads": []}
 
-    meta = data["metadata"][0] if data["metadata"] else {"total": 0, "sent": 0, "failed": 0}
+    meta = data["metadata"][0] if data["metadata"] else {"total": 0, "all_emails": []}
     total = meta.get("total", 0)
-    sent_count = meta.get("sent", 0)
-    failed_count = meta.get("failed", 0)
+    
+    # Flatten emails and count
+    all_emails = [e for sublist in meta.get("all_emails", []) for e in sublist]
+    sent_count = sum(1 for e in all_emails if e.get("status") == "sent")
+    failed_count = sum(1 for e in all_emails if e.get("status") == "failed")
     drafted_count = sent_count + failed_count
     
     success_rate = (sent_count / drafted_count * 100) if drafted_count > 0 else 0.0

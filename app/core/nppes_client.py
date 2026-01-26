@@ -91,187 +91,139 @@ async def search_providers(
     city: str,
     state: Optional[str] = None,
     specialty: str = "Internal Medicine",
-    limit: int = 5
+    limit: int = 1200
 ) -> List[dict]:
     """
-    Search for healthcare providers in the NPPES registry.
+    Search for healthcare providers in the NPPES registry with pagination support.
     
     Args:
         city: City name to search in
-        state: Optional state abbreviation (e.g., 'NY', 'CA'). If not provided, will guess.
+        state: Optional state abbreviation
         specialty: Medical specialty to search for
-        limit: Maximum number of results to return
+        limit: Maximum number of results to return (capped at 1200 by NPPES API)
         
     Returns:
-        List of provider dictionaries with keys:
-        - npi: National Provider Identifier
-        - name: Full name with title
-        - address: Full street address
-        - city: City name
-        - state: State abbreviation
-        - zip: ZIP code
-        - phone: Practice phone number (if available)
-        - fax: Fax number (if available)
-        - specialty: Taxonomy description
-        - organization_name: Practice/organization name (if available)
+        List of provider dictionaries.
     """
-    # If no state provided, try to guess from city
+    # NPPES hard limit is ~1200 via skip pagination
+    max_limit = min(limit, 1200)
+    
     if not state:
         state = guess_state_from_city(city)
     
-    # Map specialty to taxonomy description
     taxonomy = map_specialty_to_taxonomy(specialty)
     
-    # Build query parameters
-    params = {
-        "version": NPPES_API_VERSION,
-        "city": city,
-        "enumeration_type": "NPI-1",  # Individual providers only
-        "taxonomy_description": taxonomy,
-        "limit": min(limit * 2, 50),  # Request extra in case some are filtered
-    }
-    
-    if state:
-        params["state"] = state
-    
     providers = []
+    skip = 0
+    batch_size = 200 # NPPES max per request
     
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(NPPES_API_URL, params=params)
-            response.raise_for_status()
-            data = response.json()
-            
-            results = data.get("results", [])
-            
-            for result in results[:limit]:
-                # Extract basic info
-                basic = result.get("basic", {})
-                
-                # Get first name and last name
-                first_name = basic.get("first_name", "").title()
-                last_name = basic.get("last_name", "").title()
-                credential = basic.get("credential", "MD")
-                
-                if not first_name or not last_name:
-                    continue
-                
-                # Build full name with title
-                name = f"Dr. {first_name} {last_name}"
-                if credential:
-                    name += f", {credential}"
-                
-                # Get practice address (prefer location over mailing)
-                addresses = result.get("addresses", [])
-                practice_address = None
-                for addr in addresses:
-                    if addr.get("address_purpose") == "LOCATION":
-                        practice_address = addr
-                        break
-                if not practice_address and addresses:
-                    practice_address = addresses[0]
-                
-                if not practice_address:
-                    continue
-                
-                # Get organization name - try multiple sources
-                org_name = basic.get("organization_name", "")
-                
-                # If NPPES has organization name, use it
-                if org_name:
-                    logger.debug(f"Using NPPES organization name: {org_name}")
-                else:
-                    # Try to extract from practice location address line 2
-                    # BUT: Filter out suite/floor numbers (not real organizations)
-                    address_2 = practice_address.get("address_2", "")
-                    if address_2:
-                        # Check if it's just a suite/floor number (not a real org)
-                        address_2_lower = address_2.lower().strip()
-                        is_suite_number = any([
-                            address_2_lower.startswith("suite"),
-                            address_2_lower.startswith("ste "),
-                            address_2_lower.startswith("ste."),
-                            address_2_lower.startswith("#"),
-                            address_2_lower.startswith("floor"),
-                            address_2_lower.startswith("fl "),
-                            address_2_lower.startswith("unit"),
-                            address_2_lower.startswith("apt"),
-                            address_2_lower.startswith("bldg"),
-                            address_2_lower.startswith("building"),
-                        ])
-                        
-                        if not is_suite_number and len(address_2) > 5:
-                            # Looks like a real organization name, not just suite number
-                            org_name = address_2
-                            logger.debug(f"Using address_2 as organization: {org_name}")
-                        else:
-                            # It's just a suite number, ignore it
-                            org_name = None
-                            logger.debug(f"Skipping address_2 (suite/unit): {address_2}")
-                    else:
-                        org_name = None
-                        logger.debug(f"No organization data available for {last_name}")
-                
-                # Extract phone and fax from practice address
-                phone = practice_address.get("telephone_number", "")
-                fax = practice_address.get("fax_number", "")
-                
-                # Extract Direct Messaging Address from endpoints
-                direct_messaging_address = None
-                endpoints = result.get("endpoints", [])
-                if endpoints:
-                    for endpoint in endpoints:
-                        # NPPES API uses camelCase: endpointType (not endpoint_type)
-                        # and the value is "DIRECT" (uppercase)
-                        endpoint_type = endpoint.get("endpointType", "").upper()
-                        # Look for Direct Messaging Address endpoint
-                        if endpoint_type == "DIRECT":
-                            direct_messaging_address = endpoint.get("endpoint")
-                            if direct_messaging_address:
-                                logger.info(f"✅ Found Direct Messaging Address: {direct_messaging_address}")
-                                break
-                
-                # Format phone number if present (remove non-digits, add dashes)
-                if phone:
-                    phone_digits = ''.join(filter(str.isdigit, phone))
-                    if len(phone_digits) == 10:
-                        phone = f"{phone_digits[:3]}-{phone_digits[3:6]}-{phone_digits[6:]}"
-                    elif len(phone_digits) == 11 and phone_digits[0] == '1':
-                        phone = f"{phone_digits[1:4]}-{phone_digits[4:7]}-{phone_digits[7:]}"
-                
-                if fax:
-                    fax_digits = ''.join(filter(str.isdigit, fax))
-                    if len(fax_digits) == 10:
-                        fax = f"{fax_digits[:3]}-{fax_digits[3:6]}-{fax_digits[6:]}"
-                    elif len(fax_digits) == 11 and fax_digits[0] == '1':
-                        fax = f"{fax_digits[1:4]}-{fax_digits[4:7]}-{fax_digits[7:]}"
-                
-                # Build provider data - only include real organization if found
-                provider = {
-                    "npi": result.get("number"),
-                    "name": name,
-                    "address": practice_address.get("address_1", ""),
-                    "city": practice_address.get("city", city).title(),
-                    "state": practice_address.get("state", state or ""),
-                    "zip": practice_address.get("postal_code", "")[:5],
-                    "phone": phone or None,
-                    "fax": fax or None,
-                    "specialty": taxonomy,
-                    "organization_name": org_name,  # None if no real organization found
-                    "direct_messaging_address": direct_messaging_address,  # Direct Messaging Address if available
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            while len(providers) < max_limit and skip <= 1000:
+                # Always request a full batch of 200 to be efficient
+                # and to avoid complicated skip calculation
+                params = {
+                    "version": NPPES_API_VERSION,
+                    "city": city,
+                    "enumeration_type": "NPI-1",
+                    "taxonomy_description": taxonomy,
+                    "limit": batch_size,
+                    "skip": skip
                 }
                 
-                providers.append(provider)
-            
+                if state:
+                    params["state"] = state
+                
+                logger.info(f"🌐 NPPES Batch: skip={skip}, requested={batch_size}")
+                response = await client.get(NPPES_API_URL, params=params)
+                response.raise_for_status()
+                data = response.json()
+                
+                results = data.get("results", [])
+                if not results:
+                    break 
+                
+                for result in results:
+                    provider = _extract_provider_data(result, city, state, taxonomy)
+                    if provider:
+                        providers.append(provider)
+                        # Stop immediately if we hit the user's requested limit
+                        if len(providers) >= max_limit:
+                            break
+                
+                # If we got fewer than 200, it means the registry is exhausted
+                if len(results) < batch_size:
+                    break
+                    
+                skip += batch_size
+                    
     except httpx.HTTPError as e:
         logger.error(f"NPPES API error: {e}")
-        return []
     except Exception as e:
         logger.error(f"Error querying NPPES: {e}")
-        return []
     
-    return providers
+    return providers[:max_limit]
 
+
+def _extract_provider_data(result: dict, city: str, state: Optional[str], taxonomy: str) -> Optional[dict]:
+    """Helper to extract and format provider data from NPPES JSON result"""
+    basic = result.get("basic", {})
+    first_name = basic.get("first_name", "").title()
+    last_name = basic.get("last_name", "").title()
+    credential = basic.get("credential", "MD")
+    
+    if not first_name or not last_name:
+        return None
+    
+    name = f"Dr. {first_name} {last_name}"
+    if credential:
+        name += f", {credential}"
+    
+    addresses = result.get("addresses", [])
+    practice_address = next((a for a in addresses if a.get("address_purpose") == "LOCATION"), None)
+    if not practice_address and addresses:
+        practice_address = addresses[0]
+    
+    if not practice_address:
+        return None
+        
+    org_name = basic.get("organization_name", "")
+    if not org_name:
+        address_2 = practice_address.get("address_2", "")
+        if address_2:
+            address_2_lower = address_2.lower().strip()
+            is_suite = any(address_2_lower.startswith(s) for s in ["suite", "ste", "#", "floor", "fl ", "unit", "apt", "bldg", "building"])
+            if not is_suite and len(address_2) > 5:
+                org_name = address_2
+                
+    phone = practice_address.get("telephone_number", "")
+    fax = practice_address.get("fax_number", "")
+    
+    direct_messaging_address = None
+    for ep in result.get("endpoints", []):
+        if ep.get("endpointType", "").upper() == "DIRECT":
+            direct_messaging_address = ep.get("endpoint")
+            break
+
+    # Phone formatting
+    if phone:
+        digits = ''.join(filter(str.isdigit, phone))
+        if len(digits) == 10: phone = f"{digits[:3]}-{digits[3:6]}-{digits[6:]}"
+        elif len(digits) == 11 and digits[0] == '1': phone = f"{digits[1:4]}-{digits[4:7]}-{digits[7:]}"
+    
+    return {
+        "npi": result.get("number"),
+        "name": name,
+        "address": practice_address.get("address_1", ""),
+        "city": practice_address.get("city", city).title(),
+        "state": practice_address.get("state", state or ""),
+        "zip": practice_address.get("postal_code", "")[:5],
+        "phone": phone or None,
+        "fax": fax or None,
+        "specialty": taxonomy,
+        "organization_name": org_name or None,
+        "direct_messaging_address": direct_messaging_address,
+    }
 
 async def lookup_provider_by_npi(npi: str) -> Optional[dict]:
     """

@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     
     # Apollo.io Settings
     APOLLO_API_KEY: str = ""
+    APOLLO_TOTAL_CAP: int = 500  # Total searches allowed
     
     # NeverBounce Settings
     NEVERBOUNCE_API_KEY: str = ""
