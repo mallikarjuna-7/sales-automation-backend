@@ -19,8 +19,8 @@ def get_gmail_service():
         token=None,
         refresh_token=settings.GMAIL_REFRESH_TOKEN,
         token_uri="https://oauth2.googleapis.com/token",
-        client_id=settings.GMAIL_CLIENT_ID,
-        client_secret=settings.GMAIL_CLIENT_SECRET
+        client_id=settings.GMAIL_CLIENT_ID or settings.GOOGLE_CLIENT_ID,
+        client_secret=settings.GMAIL_CLIENT_SECRET or settings.GOOGLE_CLIENT_SECRET
     )
     
     # Refresh the token if needed
@@ -55,7 +55,11 @@ async def send_outreach_email(email_data: EmailSendRequest):
     sent_status = "stored (simulated)"
     email_error = None
     
-    if settings.GMAIL_CLIENT_ID and settings.GMAIL_CLIENT_SECRET and settings.GMAIL_REFRESH_TOKEN:
+    gmail_ready = (settings.GMAIL_CLIENT_ID or settings.GOOGLE_CLIENT_ID) and \
+                  (settings.GMAIL_CLIENT_SECRET or settings.GOOGLE_CLIENT_SECRET) and \
+                  settings.GMAIL_REFRESH_TOKEN
+    
+    if gmail_ready:
         try:
             # Get Gmail service
             service = get_gmail_service()

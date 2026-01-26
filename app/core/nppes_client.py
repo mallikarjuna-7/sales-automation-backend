@@ -8,12 +8,12 @@ import logging
 from typing import List, Optional
 import httpx
 
+from app.core.config import get_settings
+
 # Configure logging
 logger = logging.getLogger(__name__)
 
-
-NPPES_API_URL = "https://npiregistry.cms.hhs.gov/api/"
-NPPES_API_VERSION = "2.1"
+settings = get_settings()
 
 # Mapping of common specialty names to NPI taxonomy descriptions
 SPECIALTY_TAXONOMY_MAP = {
@@ -123,7 +123,7 @@ async def search_providers(
                 # Always request a full batch of 200 to be efficient
                 # and to avoid complicated skip calculation
                 params = {
-                    "version": NPPES_API_VERSION,
+                    "version": settings.NPPES_API_VERSION,
                     "city": city,
                     "enumeration_type": "NPI-1",
                     "taxonomy_description": taxonomy,
@@ -135,7 +135,7 @@ async def search_providers(
                     params["state"] = state
                 
                 logger.info(f"🌐 NPPES Batch: skip={skip}, requested={batch_size}")
-                response = await client.get(NPPES_API_URL, params=params)
+                response = await client.get(settings.NPPES_API_URL, params=params)
                 response.raise_for_status()
                 data = response.json()
                 
@@ -236,13 +236,13 @@ async def lookup_provider_by_npi(npi: str) -> Optional[dict]:
         Provider dictionary or None if not found
     """
     params = {
-        "version": NPPES_API_VERSION,
+        "version": settings.NPPES_API_VERSION,
         "number": npi,
     }
     
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(NPPES_API_URL, params=params)
+            response = await client.get(settings.NPPES_API_URL, params=params)
             response.raise_for_status()
             data = response.json()
             

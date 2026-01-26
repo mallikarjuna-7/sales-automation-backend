@@ -15,3 +15,6 @@ build/
 # Gmail API credentials
 credentials.json
 token.json
+
+# Auth Tester
+auth_tester.html

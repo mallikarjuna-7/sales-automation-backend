@@ -10,8 +10,10 @@ from typing import Dict, List, Optional
 from dataclasses import dataclass
 import asyncio
 import time
+from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
 
 @dataclass
@@ -30,9 +32,9 @@ class ApolloEmailResult:
 class ApolloEmailFinder:
     """Apollo.io API client for finding doctor emails."""
     
-    def __init__(self, api_key: str, base_url: str = "https://api.apollo.io/api/v1"):
+    def __init__(self, api_key: str, base_url: Optional[str] = None):
         self.api_key = api_key
-        self.base_url = base_url
+        self.base_url = base_url or settings.APOLLO_BASE_URL
         self.headers = {
             "Content-Type": "application/json",
             "Cache-Control": "no-cache",

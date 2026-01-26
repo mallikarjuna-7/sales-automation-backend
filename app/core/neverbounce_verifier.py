@@ -5,8 +5,10 @@ Verifies email addresses using the NeverBounce API.
 import httpx
 from typing import Dict, Optional
 import logging
+from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
 # Status messages for display
 STATUS_DISPLAY = {
@@ -38,7 +40,7 @@ class NeverBounceVerifier:
             api_key: NeverBounce API key (starts with 'private_' or 'secret_')
         """
         self.api_key = api_key
-        self.base_url = "https://api.neverbounce.com/v4"
+        self.base_url = settings.NEVERBOUNCE_BASE_URL
         
     async def verify_email(
         self, 
