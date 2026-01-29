@@ -11,22 +11,23 @@ import logging
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-# Configure SMTP connection
-conf = ConnectionConfig(
-    MAIL_USERNAME=settings.SMTP_USER,
-    MAIL_PASSWORD=settings.SMTP_PASSWORD,
-    MAIL_FROM=settings.MAIL_FROM,
-    MAIL_PORT=settings.SMTP_PORT,
-    MAIL_SERVER=settings.SMTP_HOST,
-    MAIL_FROM_NAME=settings.MAIL_FROM_NAME,
-    MAIL_STARTTLS=True,
-    MAIL_SSL_TLS=False,
-    USE_CREDENTIALS=True,
-    VALIDATE_CERTS=True
-)
-
-# Create FastMail instance
-fm = FastMail(conf)
+def get_smtp_config():
+    """Get SMTP configuration if credentials are available"""
+    if not all([settings.SMTP_USER, settings.SMTP_PASSWORD, settings.MAIL_FROM]):
+        return None
+    
+    return ConnectionConfig(
+        MAIL_USERNAME=settings.SMTP_USER,
+        MAIL_PASSWORD=settings.SMTP_PASSWORD,
+        MAIL_FROM=settings.MAIL_FROM,
+        MAIL_PORT=settings.SMTP_PORT,
+        MAIL_SERVER=settings.SMTP_HOST,
+        MAIL_FROM_NAME=settings.MAIL_FROM_NAME,
+        MAIL_STARTTLS=True,
+        MAIL_SSL_TLS=False,
+        USE_CREDENTIALS=True,
+        VALIDATE_CERTS=True
+    )
 
 async def send_outreach_email(email_data: EmailSendRequest):
     """Send email using SMTP with Google App Password"""
@@ -43,26 +44,36 @@ async def send_outreach_email(email_data: EmailSendRequest):
     sent_status = "stored (simulated)"
     email_error = None
     
-    try:
-        # Create email message
-        message = MessageSchema(
-            subject=email_data.subject,
-            recipients=[email_data.receiver],
-            body=email_data.body,
-            subtype=MessageType.html
-        )
-        
-        # Send the email
-        await fm.send_message(message)
-        
-        sent_status = "sent"
-        logger.info(f"Email sent successfully via SMTP to: {email_data.receiver}")
-        
-    except Exception as e:
-        # Log error but don't fail - continue with database operations
-        email_error = str(e)
-        sent_status = "failed"
-        logger.error(f"Email sending failed: {email_error}")
+    # Check if SMTP is configured
+    smtp_config = get_smtp_config()
+    
+    if smtp_config:
+        try:
+            # Create FastMail instance with config
+            fm = FastMail(smtp_config)
+            
+            # Create email message
+            message = MessageSchema(
+                subject=email_data.subject,
+                recipients=[email_data.receiver],
+                body=email_data.body,
+                subtype=MessageType.html
+            )
+            
+            # Send the email
+            await fm.send_message(message)
+            
+            sent_status = "sent"
+            logger.info(f"Email sent successfully via SMTP to: {email_data.receiver}")
+            
+        except Exception as e:
+            # Log error but don't fail - continue with database operations
+            email_error = str(e)
+            sent_status = "failed"
+            logger.error(f"Email sending failed: {email_error}")
+    else:
+        logger.warning("SMTP credentials not configured. Email will be stored but not sent.")
+        email_error = "SMTP credentials not configured"
     
     # Save email record to database
     email_record = Email(

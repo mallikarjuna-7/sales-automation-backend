@@ -28,9 +28,9 @@ class Settings(BaseSettings):
     # Email Settings (SMTP with Google App Password)
     SMTP_HOST: str = "smtp.gmail.com"
     SMTP_PORT: int = 587
-    SMTP_USER: str  # Your Gmail address
-    SMTP_PASSWORD: str  # Google App Password
-    MAIL_FROM: str  # Sender email address
+    SMTP_USER: Optional[str] = None  # Your Gmail address
+    SMTP_PASSWORD: Optional[str] = None  # Google App Password
+    MAIL_FROM: Optional[str] = None  # Sender email address
     MAIL_FROM_NAME: str = "Sales Automation"
     
     # Auth & JWT Settings
