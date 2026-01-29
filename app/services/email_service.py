@@ -5,43 +5,31 @@ from app.models.email import Email
 from app.models.lead import Lead
 from app.schemas.email import EmailSendRequest
 from beanie import PydanticObjectId
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from googleapiclient.discovery import build
-from email.mime.text import MIMEText
-import base64
+from fastapi_mail import FastMail, MessageSchema, ConnectionConfig, MessageType
+import logging
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
 
-def get_gmail_service():
-    """Create and return Gmail API service with OAuth2 credentials"""
-    creds = Credentials(
-        token=None,
-        refresh_token=settings.GMAIL_REFRESH_TOKEN,
-        token_uri="https://oauth2.googleapis.com/token",
-        client_id=settings.GMAIL_CLIENT_ID or settings.GOOGLE_CLIENT_ID,
-        client_secret=settings.GMAIL_CLIENT_SECRET or settings.GOOGLE_CLIENT_SECRET
-    )
-    
-    # Refresh the token if needed
-    if not creds.valid:
-        creds.refresh(Request())
-    
-    service = build('gmail', 'v1', credentials=creds)
-    return service
+# Configure SMTP connection
+conf = ConnectionConfig(
+    MAIL_USERNAME=settings.SMTP_USER,
+    MAIL_PASSWORD=settings.SMTP_PASSWORD,
+    MAIL_FROM=settings.MAIL_FROM,
+    MAIL_PORT=settings.SMTP_PORT,
+    MAIL_SERVER=settings.SMTP_HOST,
+    MAIL_FROM_NAME=settings.MAIL_FROM_NAME,
+    MAIL_STARTTLS=True,
+    MAIL_SSL_TLS=False,
+    USE_CREDENTIALS=True,
+    VALIDATE_CERTS=True
+)
 
-def create_message(sender, to, subject, body):
-    """Create a MIME message for Gmail API"""
-    message = MIMEText(body, 'html')
-    message['to'] = to
-    message['from'] = sender
-    message['subject'] = subject
-    
-    # Encode the message in base64
-    raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode('utf-8')
-    return {'raw': raw_message}
+# Create FastMail instance
+fm = FastMail(conf)
 
 async def send_outreach_email(email_data: EmailSendRequest):
+    """Send email using SMTP with Google App Password"""
     lead = None
     if email_data.lead_id:
         if not PydanticObjectId.is_valid(email_data.lead_id):
@@ -51,41 +39,30 @@ async def send_outreach_email(email_data: EmailSendRequest):
         if not lead:
             raise HTTPException(status_code=404, detail="Lead not found")
 
-    # Send email using Gmail API
+    # Send email using SMTP
     sent_status = "stored (simulated)"
     email_error = None
     
-    gmail_ready = (settings.GMAIL_CLIENT_ID or settings.GOOGLE_CLIENT_ID) and \
-                  (settings.GMAIL_CLIENT_SECRET or settings.GOOGLE_CLIENT_SECRET) and \
-                  settings.GMAIL_REFRESH_TOKEN
-    
-    if gmail_ready:
-        try:
-            # Get Gmail service
-            service = get_gmail_service()
-            
-            # Create the email message
-            sender_email = f"{settings.MAIL_FROM_NAME} <{settings.GMAIL_SENDER}>"
-            message = create_message(
-                sender=sender_email,
-                to=email_data.receiver,
-                subject=email_data.subject,
-                body=f"<p>{email_data.body}</p>"
-            )
-            
-            # Send the email
-            response = service.users().messages().send(
-                userId='me',
-                body=message
-            ).execute()
-            
-            sent_status = "sent"
-            print(f"Email sent successfully via Gmail API: {response.get('id')}")
-        except Exception as e:
-            # Log error but don't fail - continue with database operations
-            email_error = str(e)
-            sent_status = "failed"
-            print(f"Email sending failed: {email_error}")
+    try:
+        # Create email message
+        message = MessageSchema(
+            subject=email_data.subject,
+            recipients=[email_data.receiver],
+            body=email_data.body,
+            subtype=MessageType.html
+        )
+        
+        # Send the email
+        await fm.send_message(message)
+        
+        sent_status = "sent"
+        logger.info(f"Email sent successfully via SMTP to: {email_data.receiver}")
+        
+    except Exception as e:
+        # Log error but don't fail - continue with database operations
+        email_error = str(e)
+        sent_status = "failed"
+        logger.error(f"Email sending failed: {email_error}")
     
     # Save email record to database
     email_record = Email(

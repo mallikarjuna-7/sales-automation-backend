@@ -25,11 +25,12 @@ class Settings(BaseSettings):
     # NeverBounce Settings
     NEVERBOUNCE_API_KEY: str = ""
     
-    # Email Settings (Gmail API)
-    GMAIL_CLIENT_ID: Optional[str] = None
-    GMAIL_CLIENT_SECRET: Optional[str] = None
-    GMAIL_REFRESH_TOKEN: str
-    GMAIL_SENDER: str
+    # Email Settings (SMTP with Google App Password)
+    SMTP_HOST: str = "smtp.gmail.com"
+    SMTP_PORT: int = 587
+    SMTP_USER: str  # Your Gmail address
+    SMTP_PASSWORD: str  # Google App Password
+    MAIL_FROM: str  # Sender email address
     MAIL_FROM_NAME: str = "Sales Automation"
     
     # Auth & JWT Settings

@@ -37,10 +37,18 @@ The server will start at `http://localhost:8000`
 
 ---
 
+## 🔐 Authentication (Modern Flow)
+
+The system uses a **Modern Token Exchange** flow with Google OAuth 2.0. To access protected APIs, you must include a JWT token in the header.
+
+**Full Technical Guide**: [README_API.md](README_API.md)
+
+---
+
 ## 📚 API Documentation
 
 - **Swagger UI**: http://localhost:8000/docs
-- **ReDoc**: http://localhost:8000/redoc
+- **Technical Integration Guide**: [README_API.md](README_API.md)
 
 ---
 
